@@ -8,7 +8,7 @@ Pod::Spec.new do |s|
   s.summary          = package['description']
   s.license          = package['license']
   s.homepage         = package['repository']['url']
-  s.author           = { 'Avo Sukiasyan' => 'avetik.sukiasyan@metamap.com' }
+  s.author           = { 'juannpz' => 'juannpz@proton.me' }
   s.source           = { :path => '.' }
   s.ios.deployment_target = '13.0'
   s.swift_version         = '5.1'

@@ -15,14 +15,21 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.metamap.metamap_sdk.MetamapSdk;
 import com.metamap.metamap_sdk.Metadata;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.Iterator;
+
+import kotlin.Unit;
 
 @CapacitorPlugin(name = "MetaMapCapacitor")
 public class MetaMapCapacitorPlugin extends Plugin {
 
     private static final String TAG = "📲 MetaMapCapacitor";
+
+    public static final String EVENT_SDK_STARTED = "metamapSdkStarted";
+    public static final String EVENT_FLOW_COMPLETED = "metamapFlowCompleted";
+    public static final String EVENT_FLOW_ABANDONED = "metamapFlowAbandoned";
 
     @PluginMethod
     public void showMetaMapFlow(PluginCall call) {
@@ -31,7 +38,7 @@ public class MetaMapCapacitorPlugin extends Plugin {
         bridge.getActivity().runOnUiThread(() -> {
             String clientId = call.getString("clientId");
             String flowId = call.getString("flowId");
-            JSONObject metadata = call.getObject("metadata", new JSObject());
+            JSONObject metadataFromCall = call.getObject("metadata", new JSObject());
 
             if (clientId == null || clientId.isEmpty()) {
                 Log.e(TAG, "❌ Missing clientId");
@@ -42,31 +49,35 @@ public class MetaMapCapacitorPlugin extends Plugin {
             try {
                 Metadata.Builder metadataBuilder = new Metadata.Builder();
 
-                // Process metadata
-                Iterator<String> keys = metadata.keys();
-                while (keys.hasNext()) {
-                    String key = keys.next();
-                    try {
-                        Object value = metadata.get(key);
-                        if (key.toLowerCase().contains("color") && value instanceof String) {
-                            String hexColor = (String) value;
-                            int color = Color.parseColor(hexColor);
-                            if (hexColor.length() == 9) {
-                                color = Color.argb(Color.blue(color), Color.alpha(color), Color.red(color), Color.green(color));
+                if (metadataFromCall != null) {
+                    Iterator<String> keys = metadataFromCall.keys();
+                    while (keys.hasNext()) {
+                        String key = keys.next();
+                        try {
+                            Object value = metadataFromCall.get(key);
+
+                            if (key.toLowerCase().contains("color") && value instanceof String) {
+                                String hexColor = (String) value;
+                                try {
+                                    int parsedColor = Color.parseColor(hexColor);
+                                    metadataBuilder.with(key, parsedColor);
+                                    Log.d(TAG, "🎨 Parsed color for key '" + key + "': " + hexColor + " -> " + parsedColor);
+                                } catch (IllegalArgumentException e) {
+                                    Log.e(TAG, "⚠️ Invalid color string for key '" + key + "': " + hexColor + ". Passing original string value.", e);
+                                    metadataBuilder.with(key, value);
+                                }
+                            } else {
+                                metadataBuilder.with(key, value);
                             }
-                            metadataBuilder.with(key, color);
-                        } else {
-                            metadataBuilder.with(key, value);
+                        } catch (JSONException e) {
+                            Log.e(TAG, "⚠️ Error processing metadata key: " + key, e);
                         }
-                    } catch (Exception e) {
-                        Log.e(TAG, "⚠️ Error parsing metadata key: " + key, e);
                     }
                 }
 
                 metadataBuilder.with("sdkType", "capacitor");
                 Metadata builtMetadata = metadataBuilder.build();
 
-                // Create flow intent with verificationStarted callback
                 Intent flowIntent = MetamapSdk.INSTANCE.createFlowIntent(
                         bridge.getActivity(),
                         clientId,
@@ -75,12 +86,12 @@ public class MetaMapCapacitorPlugin extends Plugin {
                         null,
                         null,
                         (identityId, verificationId) -> {
-                            Log.d(TAG, "🟡 verificationStarted: identityId=" + identityId + ", verificationId=" + verificationId);
+                            Log.d(TAG, "🟡 " + EVENT_SDK_STARTED + ": identityId=" + identityId + ", verificationId=" + verificationId);
                             JSObject startedResult = new JSObject();
-                            startedResult.put("identityId", identityId != null ? identityId : "");
-                            startedResult.put("verificationId", verificationId != null ? verificationId : "");
-                            startedResult.put("status", "started");
-                            notifyListeners("verificationCreated", startedResult);
+                            startedResult.put("identityId", identityId != null ? identityId : JSONObject.NULL);
+                            startedResult.put("verificationId", verificationId != null ? verificationId : JSONObject.NULL);
+                            notifyListeners(EVENT_SDK_STARTED, startedResult);
+                            return Unit.INSTANCE;
                         }
                 );
 
@@ -96,31 +107,42 @@ public class MetaMapCapacitorPlugin extends Plugin {
 
     @ActivityCallback
     private void callback(PluginCall call, ActivityResult activityResult) {
-        Intent data = activityResult.getData();
-        if (data == null) {
-            Log.e(TAG, "❗ MetaMap returned null data");
-            call.reject("MetaMap result data is null");
+        if (call == null) {
+            Log.e(TAG, "❌ PluginCall object was null in @ActivityCallback. This should not happen.");
             return;
         }
 
-        String identityId = data.getStringExtra("ARG_IDENTITY_ID");
-        String verificationId = data.getStringExtra("ARG_VERIFICATION_ID");
+        Intent data = activityResult.getData();
+        String identityId = null;
+        String verificationId = null;
 
-        JSObject result = new JSObject();
-        result.put("identityId", identityId != null ? identityId : "");
-        result.put("verificationId", verificationId != null ? verificationId : "");
+        JSObject resultDataPayload = new JSObject();
+
+        if (data != null) {
+            identityId = data.getStringExtra(MetamapSdk.ARG_IDENTITY_ID);
+            verificationId = data.getStringExtra(MetamapSdk.ARG_VERIFICATION_ID);
+
+            resultDataPayload.put("identityId", identityId != null ? identityId : JSONObject.NULL);
+            resultDataPayload.put("verificationId", verificationId != null ? verificationId : JSONObject.NULL);
+        } else {
+            resultDataPayload.put("identityId", JSONObject.NULL);
+            resultDataPayload.put("verificationId", JSONObject.NULL);
+            Log.w(TAG, "onActivityResult data is null. identityId and verificationId will be null.");
+        }
+
 
         if (activityResult.getResultCode() == Activity.RESULT_OK) {
-            Log.d(TAG, "✅ verificationSuccess: identityId=" + identityId + ", verificationId=" + verificationId);
-            call.resolve(result);
+            Log.d(TAG, "✅ Flow completed (Activity.RESULT_OK): identityId=" + identityId + ", verificationId=" + verificationId);
+            notifyListeners(EVENT_FLOW_COMPLETED, resultDataPayload);
+            call.resolve(resultDataPayload);
         } else {
-            result.put("status", "cancelled");
-            Log.d(TAG, "❌ verificationCancelled: identityId=" + identityId + ", verificationId=" + verificationId);
+            Log.d(TAG, "❌ Flow abandoned or cancelled (Activity.RESULT_CODE != OK): identityId=" + identityId + ", verificationId=" + verificationId + ", resultCode=" + activityResult.getResultCode());
+            notifyListeners(EVENT_FLOW_ABANDONED, resultDataPayload);
             call.reject(
-                    "Verification was cancelled by the user",
-                    "verificationCancelled",
+                    "Verification flow was abandoned or cancelled by the user.",
+                    "FLOW_ABANDONED_OR_CANCELLED",
                     null,
-                    result
+                    resultDataPayload
             );
         }
     }
