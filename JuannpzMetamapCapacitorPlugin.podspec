@@ -3,7 +3,7 @@ require 'json'
 package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
 
 Pod::Spec.new do |s|
-  s.name             = 'MetamapCapacitorPlugin'
+  s.name             = 'JuannpzMetamapCapacitorPlugin'
   s.version          = package['version']
   s.summary          = package['description']
   s.license          = package['license']
@@ -18,5 +18,5 @@ Pod::Spec.new do |s|
 
   # Dependencies
   s.dependency 'Capacitor'
-  s.dependency 'MetaMapSDK', '3.22.9'
+  s.dependency 'MetaMapSDK', '3.23.0'
 end
